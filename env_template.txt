@@ -1,0 +1,21 @@
+# AutoAvatar - Environment Variables Configuration
+# Copy this file to .env and fill in your API keys
+
+# OpenAI API Key (Required for script generation)
+# Get from: https://platform.openai.com/api-keys
+OPENAI_API_KEY=your_openai_api_key_here
+
+# Voice Generation APIs (Choose one or both)
+
+# ElevenLabs API Key (Premium voice generation)
+# Get from: https://elevenlabs.io/
+ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+
+# Azure Speech Services (Alternative to ElevenLabs)
+# Get from: https://azure.microsoft.com/en-us/services/cognitive-services/speech-services/
+AZURE_SPEECH_KEY=your_azure_speech_key_here
+AZURE_SPEECH_REGION=eastus
+
+# Optional: Custom voice settings
+ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
+AZURE_VOICE_NAME=en-US-AriaNeural 
