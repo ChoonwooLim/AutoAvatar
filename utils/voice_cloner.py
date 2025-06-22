@@ -16,7 +16,14 @@ except ImportError:
     VideoFileClip = None
     MOVIEPY_AVAILABLE = False
     print("⚠️ MoviePy not available. Video processing will be disabled.")
-import pyaudio
+try:
+    import pyaudio
+    PYAUDIO_AVAILABLE = True
+except ImportError:
+    pyaudio = None
+    PYAUDIO_AVAILABLE = False
+    print("⚠️ PyAudio not available. Microphone recording will be disabled.")
+
 import wave
 import threading
 import time
@@ -30,6 +37,8 @@ class VoiceCloner:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.whisper_model = None
         self.recording_active = False
+        self.monitoring_active = False
+        self.monitoring_thread = None
         self.audio_buffer = []
         
         # Initialize Whisper for transcription
@@ -122,17 +131,26 @@ class VoiceCloner:
         except Exception as e:
             return {"success": False, "error": str(e)}
     
-    def record_voice_from_microphone(self, duration: int, output_path: str) -> Dict:
+    def record_voice_from_microphone(self, duration: int, output_path: str, 
+                                   gain_multiplier: float = 1.0, 
+                                   device_index: Optional[int] = None,
+                                   progress_callback: Optional[callable] = None) -> Dict:
         """
-        Record voice from microphone
+        Record voice from microphone with gain control and progress tracking
         
         Args:
             duration: Recording duration in seconds
             output_path: Path to save recorded audio
+            gain_multiplier: Audio gain multiplier (0.1 to 5.0)
+            device_index: Specific microphone device index
+            progress_callback: Callback function for progress updates
             
         Returns:
             Dictionary with recording results
         """
+        if not PYAUDIO_AVAILABLE:
+            return {"success": False, "error": "PyAudio not available. Cannot record from microphone."}
+        
         try:
             # Audio recording parameters
             chunk = 1024
@@ -140,25 +158,62 @@ class VoiceCloner:
             channels = 1
             rate = 44100
             
+            # Clamp gain multiplier to safe range
+            gain_multiplier = max(0.1, min(5.0, gain_multiplier))
+            
             # Initialize PyAudio
             p = pyaudio.PyAudio()
             
-            # Open stream
+            # Open stream with specified device
             stream = p.open(
                 format=format,
                 channels=channels,
                 rate=rate,
                 input=True,
+                input_device_index=device_index,
                 frames_per_buffer=chunk
             )
             
-            print(f"🎤 Recording for {duration} seconds...")
+            print(f"🎤 Recording for {duration} seconds... (Gain: {gain_multiplier:.1f}x)")
             frames = []
             
-            # Record audio
-            for i in range(0, int(rate / chunk * duration)):
+            # Calculate total chunks needed
+            total_chunks = int(rate / chunk * duration)
+            
+            # Record audio with progress tracking
+            for i in range(total_chunks):
                 data = stream.read(chunk)
+                
+                # Apply gain adjustment
+                if gain_multiplier != 1.0:
+                    # Convert to numpy array, apply gain, convert back
+                    audio_chunk = np.frombuffer(data, dtype=np.int16)
+                    audio_chunk = audio_chunk.astype(np.float32)
+                    audio_chunk *= gain_multiplier
+                    # Prevent clipping
+                    audio_chunk = np.clip(audio_chunk, -32767, 32767)
+                    data = audio_chunk.astype(np.int16).tobytes()
+                
                 frames.append(data)
+                
+                # Update progress
+                if progress_callback:
+                    progress = (i + 1) / total_chunks
+                    elapsed_time = (i + 1) * chunk / rate
+                    remaining_time = duration - elapsed_time
+                    
+                    # Calculate current audio level for visual feedback
+                    audio_level = np.sqrt(np.mean(
+                        np.frombuffer(data, dtype=np.int16).astype(np.float32) ** 2
+                    )) / 32767.0
+                    
+                    progress_callback({
+                        'progress': progress,
+                        'elapsed_time': elapsed_time,
+                        'remaining_time': remaining_time,
+                        'audio_level': audio_level,
+                        'gain': gain_multiplier
+                    })
             
             # Stop recording
             stream.stop_stream()
@@ -181,11 +236,16 @@ class VoiceCloner:
             # Cleanup
             os.remove(temp_wav)
             
+            # Calculate final audio statistics
+            audio_stats = self._calculate_audio_stats(processed_audio)
+            
             return {
                 "success": True,
                 "output_path": output_path,
                 "duration": duration,
-                "quality_score": self._assess_audio_quality(processed_audio)
+                "gain_applied": gain_multiplier,
+                "quality_score": self._assess_audio_quality(processed_audio),
+                "audio_stats": audio_stats
             }
             
         except Exception as e:
@@ -460,6 +520,9 @@ class VoiceCloner:
     
     def get_available_microphones(self) -> List[Dict]:
         """Get list of available microphones"""
+        if not PYAUDIO_AVAILABLE:
+            return []
+        
         try:
             p = pyaudio.PyAudio()
             microphones = []
@@ -483,6 +546,9 @@ class VoiceCloner:
     
     def test_microphone(self, device_index: Optional[int] = None) -> Dict:
         """Test microphone functionality"""
+        if not PYAUDIO_AVAILABLE:
+            return {"success": False, "microphone_working": False, "error": "PyAudio not available"}
+        
         try:
             p = pyaudio.PyAudio()
             
@@ -527,4 +593,231 @@ class VoiceCloner:
                 "success": False,
                 "microphone_working": False,
                 "error": str(e)
+            }
+    
+    def _calculate_audio_stats(self, audio: np.ndarray) -> Dict:
+        """Calculate audio statistics for feedback"""
+        try:
+            # RMS level
+            rms = np.sqrt(np.mean(audio ** 2))
+            
+            # Peak level
+            peak = np.max(np.abs(audio))
+            
+            # Dynamic range
+            dynamic_range = peak / (rms + 1e-10)
+            
+            # Frequency analysis
+            fft = np.fft.rfft(audio)
+            magnitude = np.abs(fft)
+            dominant_freq = np.argmax(magnitude) * self.sample_rate / (2 * len(magnitude))
+            
+            return {
+                'rms_level': float(rms),
+                'peak_level': float(peak),
+                'dynamic_range': float(dynamic_range),
+                'dominant_frequency': float(dominant_freq),
+                'clipping_detected': peak > 0.95
+            }
+        except:
+            return {
+                'rms_level': 0.0,
+                'peak_level': 0.0,
+                'dynamic_range': 0.0,
+                'dominant_frequency': 0.0,
+                'clipping_detected': False
+            }
+    
+    def start_audio_monitoring(self, device_index: Optional[int] = None, 
+                             gain_multiplier: float = 1.0,
+                             callback: Optional[callable] = None) -> Dict:
+        """
+        Start real-time audio level monitoring
+        
+        Args:
+            device_index: Microphone device index
+            gain_multiplier: Audio gain multiplier
+            callback: Callback function for level updates
+            
+        Returns:
+            Dictionary with monitoring status
+        """
+        if not PYAUDIO_AVAILABLE:
+            return {"success": False, "error": "PyAudio not available. Cannot start audio monitoring."}
+        
+        try:
+            import threading
+            
+            # Audio parameters
+            chunk = 1024
+            format = pyaudio.paInt16
+            channels = 1
+            rate = 44100
+            
+            # Initialize PyAudio
+            p = pyaudio.PyAudio()
+            
+            # Open stream
+            stream = p.open(
+                format=format,
+                channels=channels,
+                rate=rate,
+                input=True,
+                input_device_index=device_index,
+                frames_per_buffer=chunk
+            )
+            
+            self.monitoring_active = True
+            
+            def monitor_audio():
+                """Audio monitoring thread function"""
+                try:
+                    while self.monitoring_active:
+                        # Read audio data
+                        data = stream.read(chunk, exception_on_overflow=False)
+                        
+                        # Convert to numpy array and apply gain
+                        audio_chunk = np.frombuffer(data, dtype=np.int16)
+                        audio_chunk = audio_chunk.astype(np.float32)
+                        audio_chunk *= gain_multiplier
+                        
+                        # Calculate audio level
+                        rms = np.sqrt(np.mean(audio_chunk ** 2))
+                        peak = np.max(np.abs(audio_chunk))
+                        
+                        # Normalize to 0-1 range
+                        rms_normalized = min(1.0, rms / 32767.0)
+                        peak_normalized = min(1.0, peak / 32767.0)
+                        
+                        # Check for clipping
+                        clipping = peak_normalized > 0.95
+                        
+                        # Call callback with level data
+                        if callback:
+                            callback({
+                                'rms_level': rms_normalized,
+                                'peak_level': peak_normalized,
+                                'gain': gain_multiplier,
+                                'clipping': clipping,
+                                'timestamp': time.time()
+                            })
+                        
+                        time.sleep(0.05)  # 20 FPS update rate
+                        
+                except Exception as e:
+                    print(f"Audio monitoring error: {e}")
+                finally:
+                    stream.stop_stream()
+                    stream.close()
+                    p.terminate()
+            
+            # Start monitoring thread
+            self.monitoring_thread = threading.Thread(target=monitor_audio, daemon=True)
+            self.monitoring_thread.start()
+            
+            return {
+                "success": True,
+                "message": "Audio monitoring started"
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def stop_audio_monitoring(self):
+        """Stop audio monitoring"""
+        self.monitoring_active = False
+        if hasattr(self, 'monitoring_thread'):
+            self.monitoring_thread.join(timeout=1.0)
+        return {"success": True, "message": "Audio monitoring stopped"}
+    
+    def get_audio_level_preview(self, device_index: Optional[int] = None, 
+                              gain_multiplier: float = 1.0, 
+                              duration: float = 0.1) -> Dict:
+        """
+        Get a quick audio level preview
+        
+        Args:
+            device_index: Microphone device index
+            gain_multiplier: Audio gain multiplier
+            duration: Preview duration in seconds
+            
+        Returns:
+            Dictionary with audio level information
+        """
+        if not PYAUDIO_AVAILABLE:
+            return {"success": False, "error": "PyAudio not available. Cannot get audio level preview."}
+        
+        try:
+            # Audio parameters
+            chunk = 1024
+            format = pyaudio.paInt16
+            channels = 1
+            rate = 44100
+            
+            # Initialize PyAudio
+            p = pyaudio.PyAudio()
+            
+            # Open stream
+            stream = p.open(
+                format=format,
+                channels=channels,
+                rate=rate,
+                input=True,
+                input_device_index=device_index,
+                frames_per_buffer=chunk
+            )
+            
+            # Read audio for specified duration
+            frames_to_read = int(rate * duration / chunk)
+            audio_levels = []
+            
+            for _ in range(max(1, frames_to_read)):
+                data = stream.read(chunk, exception_on_overflow=False)
+                
+                # Convert to numpy array and apply gain
+                audio_chunk = np.frombuffer(data, dtype=np.int16)
+                audio_chunk = audio_chunk.astype(np.float32)
+                audio_chunk *= gain_multiplier
+                
+                # Calculate levels
+                rms = np.sqrt(np.mean(audio_chunk ** 2))
+                peak = np.max(np.abs(audio_chunk))
+                
+                audio_levels.append({
+                    'rms': min(1.0, rms / 32767.0),
+                    'peak': min(1.0, peak / 32767.0)
+                })
+            
+            # Cleanup
+            stream.stop_stream()
+            stream.close()
+            p.terminate()
+            
+            # Calculate average levels
+            if audio_levels:
+                avg_rms = np.mean([level['rms'] for level in audio_levels])
+                avg_peak = np.mean([level['peak'] for level in audio_levels])
+                max_peak = max([level['peak'] for level in audio_levels])
+            else:
+                avg_rms = avg_peak = max_peak = 0.0
+            
+            return {
+                "success": True,
+                "rms_level": avg_rms,
+                "peak_level": avg_peak,
+                "max_peak": max_peak,
+                "clipping_detected": max_peak > 0.95,
+                "gain_applied": gain_multiplier,
+                "signal_quality": "Good" if avg_rms > 0.1 else "Low" if avg_rms > 0.01 else "Very Low"
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "rms_level": 0.0,
+                "peak_level": 0.0
             } 

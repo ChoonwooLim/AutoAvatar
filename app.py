@@ -189,31 +189,386 @@ def main():
             with voice_cloning_tab2:
                 st.write("**직접 음성 녹음:**")
                 
-                # 마이크 테스트
-                if st.button("🎤 마이크 테스트", key="test_mic_btn"):
-                    mic_test = st.session_state.generator.test_microphone()
-                    if mic_test.get("microphone_working"):
-                        st.success(f"✅ 마이크 작동 중! 품질: {mic_test.get('quality', '알 수 없음')}")
-                    else:
-                        st.error(f"❌ 마이크 문제: {mic_test.get('error', '알 수 없는 오류')}")
+                # 마이크 테스트 및 볼륨 모니터링
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if st.button("🎤 마이크 테스트", key="test_mic_btn"):
+                        mic_test = st.session_state.generator.test_microphone()
+                        if mic_test.get("microphone_working"):
+                            st.success(f"✅ 마이크 작동 중! 품질: {mic_test.get('quality', '알 수 없음')}")
+                        else:
+                            st.error(f"❌ 마이크 문제: {mic_test.get('error', '알 수 없는 오류')}")
+                
+                with col2:
+                    # 실시간 볼륨 모니터링 토글
+                    if 'audio_monitoring' not in st.session_state:
+                        st.session_state.audio_monitoring = False
+                    if 'audio_level_data' not in st.session_state:
+                        st.session_state.audio_level_data = {'rms_level': 0, 'peak_level': 0, 'clipping': False}
+                    
+                    if st.button("📊 볼륨 모니터링", key="volume_monitor_btn"):
+                        if not st.session_state.audio_monitoring:
+                            # 모니터링 시작
+                            def level_callback(data):
+                                st.session_state.audio_level_data = data
+                            
+                            # 현재 설정 가져오기 (세션 상태에서)
+                            current_gain = st.session_state.get('current_gain', 1.0)
+                            current_mic = st.session_state.get('current_mic_index', None)
+                            
+                            result = st.session_state.generator.start_audio_monitoring(
+                                device_index=current_mic,
+                                gain_multiplier=current_gain,
+                                callback=level_callback
+                            )
+                            
+                            if result.get("success"):
+                                st.session_state.audio_monitoring = True
+                                st.success("🎙️ 볼륨 모니터링 시작")
+                            else:
+                                st.error(f"모니터링 시작 실패: {result.get('error', '알 수 없는 오류')}")
+                        else:
+                            # 모니터링 중지
+                            st.session_state.generator.stop_audio_monitoring()
+                            st.session_state.audio_monitoring = False
+                            st.session_state.audio_level_data = {'rms_level': 0, 'peak_level': 0, 'clipping': False}
+                            st.info("🔇 볼륨 모니터링 중지")
+                            st.rerun()
+                
+                # 실시간 볼륨 표시창
+                if st.session_state.audio_monitoring:
+                    st.markdown("### 🎚️ 실시간 오디오 레벨")
+                    
+                    # 오디오 레벨 데이터 가져오기
+                    level_data = st.session_state.audio_level_data
+                    rms_level = level_data.get('rms_level', 0)
+                    peak_level = level_data.get('peak_level', 0)
+                    clipping = level_data.get('clipping', False)
+                    
+                    # RMS 레벨 바
+                    rms_percentage = min(100, rms_level * 100)
+                    rms_color = "red" if clipping else "orange" if rms_percentage > 80 else "green"
+                    
+                    st.markdown(f"""
+                    <div style="margin: 10px 0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                            <span><strong>🎤 RMS 레벨</strong></span>
+                            <span style="color: {'red' if clipping else 'inherit'};">
+                                {rms_percentage:.1f}% {'🚨 CLIP!' if clipping else ''}
+                            </span>
+                        </div>
+                        <div style="
+                            width: 100%;
+                            height: 25px;
+                            background: #ddd;
+                            border-radius: 12px;
+                            overflow: hidden;
+                            border: 2px solid {'red' if clipping else '#ccc'};
+                        ">
+                            <div style="
+                                width: {rms_percentage}%;
+                                height: 100%;
+                                background: linear-gradient(90deg, {rms_color}, {rms_color});
+                                transition: width 0.1s ease;
+                                border-radius: 10px;
+                            "></div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # 피크 레벨 바
+                    peak_percentage = min(100, peak_level * 100)
+                    peak_color = "red" if peak_percentage > 95 else "orange" if peak_percentage > 80 else "green"
+                    
+                    st.markdown(f"""
+                    <div style="margin: 10px 0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                            <span><strong>📈 피크 레벨</strong></span>
+                            <span>{peak_percentage:.1f}%</span>
+                        </div>
+                        <div style="
+                            width: 100%;
+                            height: 20px;
+                            background: #ddd;
+                            border-radius: 10px;
+                            overflow: hidden;
+                        ">
+                            <div style="
+                                width: {peak_percentage}%;
+                                height: 100%;
+                                background: {peak_color};
+                                transition: width 0.1s ease;
+                                border-radius: 8px;
+                            "></div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # 상태 표시
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        signal_quality = "좋음" if rms_level > 0.1 else "보통" if rms_level > 0.01 else "낮음"
+                        quality_color = "green" if rms_level > 0.1 else "orange" if rms_level > 0.01 else "red"
+                        st.markdown(f"**신호 품질:** <span style='color: {quality_color}'>{signal_quality}</span>", unsafe_allow_html=True)
+                    
+                    with col2:
+                        gain_status = f"{level_data.get('gain', 1.0):.1f}x"
+                        st.markdown(f"**적용된 게인:** {gain_status}")
+                    
+                    with col3:
+                        if clipping:
+                            st.markdown("**상태:** <span style='color: red'>⚠️ 클리핑</span>", unsafe_allow_html=True)
+                        elif rms_level > 0.05:
+                            st.markdown("**상태:** <span style='color: green'>✅ 정상</span>", unsafe_allow_html=True)
+                        else:
+                            st.markdown("**상태:** <span style='color: orange'>🔇 조용함</span>", unsafe_allow_html=True)
+                    
+                    # 자동 새로고침 (모니터링 중일 때만)
+                    time.sleep(0.1)
+                    st.rerun()
                 
                 # 녹음 설정
-                record_duration = st.slider("녹음 시간 (초)", 10, 60, 20)
+                col1, col2 = st.columns(2)
+                with col1:
+                    record_duration = st.slider("녹음 시간 (초)", 10, 60, 20)
+                with col2:
+                    gain_multiplier = st.slider(
+                        "입력 게인 (배율)", 
+                        min_value=0.1, 
+                        max_value=5.0, 
+                        value=1.0, 
+                        step=0.1,
+                        help="마이크 입력 음량을 조정합니다. 1.0이 기본값입니다."
+                    )
+                    # 세션 상태에 저장
+                    st.session_state.current_gain = gain_multiplier
                 
-                if st.button("🔴 녹음 시작", key="start_recording_btn"):
-                    with st.spinner(f"{record_duration}초 동안 녹음 중..."):
+                # 게인 레벨 표시 및 실시간 반영
+                if gain_multiplier < 0.5:
+                    st.info("🔉 낮은 게인: 조용한 환경에서 사용")
+                elif gain_multiplier > 2.0:
+                    st.warning("🔊 높은 게인: 노이즈가 증가할 수 있습니다")
+                else:
+                    st.success("🔊 적정 게인: 권장 설정")
+                
+                # 게인 변경 시 모니터링 업데이트
+                if st.session_state.audio_monitoring:
+                    # 현재 게인과 저장된 게인이 다르면 모니터링 재시작
+                    if 'last_gain' not in st.session_state:
+                        st.session_state.last_gain = gain_multiplier
+                    elif abs(st.session_state.last_gain - gain_multiplier) > 0.1:
+                        st.session_state.last_gain = gain_multiplier
+                        # 모니터링 재시작
+                        st.session_state.generator.stop_audio_monitoring()
+                        
+                        def level_callback(data):
+                            st.session_state.audio_level_data = data
+                        
+                        st.session_state.generator.start_audio_monitoring(
+                            device_index=st.session_state.get('current_mic_index', None),
+                            gain_multiplier=gain_multiplier,
+                            callback=level_callback
+                        )
+                
+                # 마이크 선택 (고급 옵션)
+                with st.expander("🎙️ 고급 녹음 설정"):
+                    available_mics = st.session_state.generator.get_available_microphones()
+                    if available_mics:
+                        mic_options = ["기본 마이크"] + [f"{mic['name']}" for mic in available_mics]
+                        selected_mic = st.selectbox("마이크 선택", mic_options)
+                        
+                        if selected_mic != "기본 마이크":
+                            selected_mic_index = next(
+                                (i for i, mic in enumerate(available_mics) 
+                                 if mic['name'] == selected_mic), None
+                            )
+                        else:
+                            selected_mic_index = None
+                        
+                        # 세션 상태에 저장
+                        st.session_state.current_mic_index = selected_mic_index
+                    else:
+                        selected_mic_index = None
+                        st.write("사용 가능한 마이크를 찾을 수 없습니다.")
+                        # 세션 상태에 저장
+                        st.session_state.current_mic_index = None
+                    
+                    # 빠른 레벨 체크
+                    if st.button("⚡ 빠른 레벨 체크", key="quick_level_check"):
+                        with st.spinner("오디오 레벨 확인 중..."):
+                            level_check = st.session_state.generator.get_audio_level_preview(
+                                device_index=st.session_state.get('current_mic_index', None),
+                                gain_multiplier=st.session_state.get('current_gain', 1.0),
+                                duration=1.0
+                            )
+                            
+                            if level_check.get("success"):
+                                rms = level_check.get("rms_level", 0)
+                                peak = level_check.get("peak_level", 0)
+                                quality = level_check.get("signal_quality", "알 수 없음")
+                                clipping = level_check.get("clipping_detected", False)
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.metric("RMS 레벨", f"{rms*100:.1f}%")
+                                    st.metric("신호 품질", quality)
+                                with col2:
+                                    st.metric("피크 레벨", f"{peak*100:.1f}%")
+                                    if clipping:
+                                        st.error("⚠️ 클리핑 감지됨!")
+                                    else:
+                                        st.success("✅ 클리핑 없음")
+                            else:
+                                st.error(f"레벨 체크 실패: {level_check.get('error', '알 수 없는 오류')}")
+                
+                # 녹음 상태 초기화
+                if 'recording_state' not in st.session_state:
+                    st.session_state.recording_state = 'idle'  # idle, recording, processing
+                if 'recording_start_time' not in st.session_state:
+                    st.session_state.recording_start_time = None
+                if 'recording_process' not in st.session_state:
+                    st.session_state.recording_process = None
+                if 'recording_progress_data' not in st.session_state:
+                    st.session_state.recording_progress_data = None
+                
+                # 녹음 상태에 따른 UI
+                if st.session_state.recording_state == 'idle':
+                    # 녹음 시작 버튼
+                    if st.button("🔴 녹음 시작", key="start_recording_btn"):
+                        st.session_state.recording_state = 'recording'
+                        st.session_state.recording_start_time = time.time()
+                        st.rerun()
+                
+                elif st.session_state.recording_state == 'recording':
+                    # 녹음 중 상태 표시
+                    elapsed_time = time.time() - st.session_state.recording_start_time
+                    remaining_time = max(0, record_duration - elapsed_time)
+                    
+                    # 진행 상황 표시
+                    progress = min(elapsed_time / record_duration, 1.0)
+                    
+                    # 녹음 상태 표시 박스
+                    st.markdown(f"""
+                    <div style="
+                        background: linear-gradient(90deg, #ff4444, #ff6666);
+                        color: white;
+                        padding: 1rem;
+                        border-radius: 10px;
+                        text-align: center;
+                        margin: 1rem 0;
+                        animation: pulse 2s infinite;
+                    ">
+                        <h3>🔴 녹음 중... (게인: {gain_multiplier:.1f}x)</h3>
+                    </div>
+                    <style>
+                    @keyframes pulse {{
+                        0% {{ opacity: 1; }}
+                        50% {{ opacity: 0.7; }}
+                        100% {{ opacity: 1; }}
+                    }}
+                    </style>
+                    """, unsafe_allow_html=True)
+                    
+                    # 향상된 진행률 표시
+                    progress_col1, progress_col2 = st.columns([3, 1])
+                    
+                    with progress_col1:
+                        st.progress(progress, text=f"진행률: {progress*100:.1f}% | {elapsed_time:.1f}s / {record_duration}s")
+                    
+                    with progress_col2:
+                        # 실시간 오디오 레벨 표시 (시뮬레이션)
+                        if st.session_state.recording_progress_data:
+                            audio_level = st.session_state.recording_progress_data.get('audio_level', 0)
+                            level_percentage = min(100, audio_level * 100)
+                            
+                            # 오디오 레벨 바
+                            level_color = "green" if level_percentage < 70 else "orange" if level_percentage < 90 else "red"
+                            st.markdown(f"""
+                            <div style="text-align: center;">
+                                <small>음성 레벨</small><br>
+                                <div style="
+                                    width: 100%;
+                                    height: 20px;
+                                    background: #ddd;
+                                    border-radius: 10px;
+                                    overflow: hidden;
+                                ">
+                                    <div style="
+                                        width: {level_percentage}%;
+                                        height: 100%;
+                                        background: {level_color};
+                                        transition: width 0.1s;
+                                    "></div>
+                                </div>
+                                <small>{level_percentage:.0f}%</small>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    
+                    # 상세 정보 표시
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("경과 시간", f"{elapsed_time:.1f}초")
+                    with col2:
+                        st.metric("남은 시간", f"{remaining_time:.1f}초")
+                    with col3:
+                        if st.session_state.recording_progress_data:
+                            gain_status = "🔊 정상" if gain_multiplier <= 2.0 else "⚠️ 높음"
+                            st.metric("게인 상태", gain_status)
+                    
+                    # 실시간 오디오 통계 (있는 경우)
+                    if st.session_state.recording_progress_data:
+                        with st.expander("📊 실시간 오디오 통계", expanded=False):
+                            data = st.session_state.recording_progress_data
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write(f"**오디오 레벨:** {data.get('audio_level', 0):.3f}")
+                                st.write(f"**적용된 게인:** {data.get('gain', 1.0):.1f}x")
+                            with col2:
+                                st.write(f"**진행률:** {data.get('progress', 0)*100:.1f}%")
+                                if data.get('audio_level', 0) > 0.9:
+                                    st.warning("⚠️ 오디오 레벨이 높습니다!")
+                    
+                    # 정지 버튼 (크고 눈에 띄게)
+                    if st.button("⏹️ 녹음 정지", key="stop_recording_btn", type="secondary", use_container_width=True):
+                        st.session_state.recording_state = 'processing'
+                        st.rerun()
+                    
+                    # 자동 정지 (시간 초과)
+                    if elapsed_time >= record_duration:
+                        st.session_state.recording_state = 'processing'
+                        st.rerun()
+                    
+                    # 실시간 업데이트를 위한 자동 새로고침
+                    if remaining_time > 0:
+                        time.sleep(0.3)  # 0.3초마다 업데이트 (더 부드러운 UI)
+                        st.rerun()
+                
+                elif st.session_state.recording_state == 'processing':
+                    # 녹음 처리 중
+                    with st.spinner("녹음을 처리하고 음성 샘플을 생성하는 중..."):
                         import uuid
                         session_id = str(uuid.uuid4())[:8]
                         recorded_path = os.path.join(Config.TEMP_DIR, f"recorded_voice_{session_id}.wav")
                         
-                        # 음성 녹음
+                        # 실제 녹음 시간 계산
+                        actual_duration = min(time.time() - st.session_state.recording_start_time, record_duration)
+                        
+                        # 프로그레스 콜백 함수 정의
+                        def progress_callback(data):
+                            st.session_state.recording_progress_data = data
+                        
+                        # 음성 녹음 (게인 조정과 프로그레스 콜백 포함)
                         record_result = st.session_state.generator.record_voice_from_microphone(
-                            duration=record_duration,
-                            output_path=recorded_path
+                            duration=int(actual_duration),
+                            output_path=recorded_path,
+                            gain_multiplier=st.session_state.get('current_gain', 1.0),
+                            device_index=st.session_state.get('current_mic_index', None),
+                            progress_callback=progress_callback
                         )
                         
                         if record_result.get("success"):
-                            st.success("✅ 녹음 완료!")
+                            st.success(f"✅ 녹음 완료! ({actual_duration:.1f}초)")
                             
                             # 녹음에서 음성 샘플 생성
                             samples_result = st.session_state.generator.tts_engine.create_voice_samples(
@@ -222,16 +577,53 @@ def main():
                             )
                             
                             if samples_result.get("success"):
-                                st.write(f"• **품질 점수:** {record_result['quality_score']:.2f}")
-                                st.write(f"• **생성된 샘플:** {samples_result['total_samples']}")
+                                # 녹음 결과 통계 표시
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("품질 점수", f"{record_result.get('quality_score', 0):.2f}")
+                                with col2:
+                                    st.metric("생성된 샘플", samples_result['total_samples'])
+                                with col3:
+                                    st.metric("녹음 길이", f"{actual_duration:.1f}초")
+                                
+                                # 오디오 통계 (있는 경우)
+                                audio_stats = record_result.get('audio_stats', {})
+                                if audio_stats:
+                                    with st.expander("📊 상세 오디오 분석", expanded=True):
+                                        stat_col1, stat_col2 = st.columns(2)
+                                        with stat_col1:
+                                            st.write(f"**RMS 레벨:** {audio_stats.get('rms_level', 0):.3f}")
+                                            st.write(f"**피크 레벨:** {audio_stats.get('peak_level', 0):.3f}")
+                                            st.write(f"**적용된 게인:** {record_result.get('gain_applied', 1.0):.1f}x")
+                                        with stat_col2:
+                                            st.write(f"**다이나믹 레인지:** {audio_stats.get('dynamic_range', 0):.2f}")
+                                            st.write(f"**주요 주파수:** {audio_stats.get('dominant_frequency', 0):.0f} Hz")
+                                            
+                                            if audio_stats.get('clipping_detected', False):
+                                                st.error("⚠️ 클리핑 감지됨 - 게인을 낮춰주세요")
+                                            else:
+                                                st.success("✅ 클리핑 없음")
                                 
                                 # 세션 정보 저장
                                 st.session_state.voice_session_id = session_id
                                 st.session_state.voice_samples_dir = samples_result['output_dir']
+                                
+                                # 오디오 플레이어 추가
+                                if os.path.exists(recorded_path):
+                                    st.audio(recorded_path, format="audio/wav")
                             else:
                                 st.error("녹음에서 음성 샘플 생성 실패")
                         else:
-                            st.error(f"❌ 녹음 실패: {record_result.get('error')}")
+                            st.error(f"❌ 녹음 실패: {record_result.get('error', '알 수 없는 오류')}")
+                    
+                    # 상태 초기화
+                    st.session_state.recording_state = 'idle'
+                    st.session_state.recording_start_time = None
+                    
+                    # 새 녹음 버튼
+                    if st.button("🔄 새로 녹음하기", key="new_recording_btn"):
+                        st.session_state.recording_state = 'idle'
+                        st.rerun()
             
             with voice_cloning_tab3:
                 st.write("**현재 음성 세션:**")
@@ -409,6 +801,19 @@ def main():
         with main_tab3:
             # File management tab
             show_file_management()
+    
+    # Additional sections (outside tabs)
+    st.markdown("---")
+    show_additional_features()
+    
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    <div style="text-align: center; color: #666; padding: 2rem;">
+        <p>🎬 AutoAvatar - AI 뉴스 비디오 생성기</p>
+        <p>❤️ Streamlit, OpenAI, MoviePy로 제작</p>
+    </div>
+    """, unsafe_allow_html=True)
 
 def generate_video(image_path, news_topic, duration, style, voice_provider, music_path, voice_samples_dir, show_script, show_timing):
     """Generate video with progress tracking"""
@@ -545,18 +950,4 @@ def show_file_management():
             st.write("**출력 폴더:** 아직 생성되지 않음")
 
 if __name__ == "__main__":
-    main()
-    
-    # Additional sections
-    st.markdown("---")
-    show_additional_features()
-    show_file_management()
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-    <div style="text-align: center; color: #666; padding: 2rem;">
-        <p>🎬 AutoAvatar - AI News Video Generator</p>
-        <p>Created with ❤️ using Streamlit, OpenAI, and MoviePy</p>
-    </div>
-    """, unsafe_allow_html=True) 
+    main() 

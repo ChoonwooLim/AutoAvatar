@@ -224,9 +224,18 @@ class AutoVideoGenerator:
         """Extract and process voice from audio file"""
         return self.tts_engine.extract_voice_from_audio(audio_path, output_path)
     
-    def record_voice_from_microphone(self, duration: int, output_path: str) -> Dict:
-        """Record voice from microphone"""
-        return self.tts_engine.record_voice_from_microphone(duration, output_path)
+    def record_voice_from_microphone(self, duration: int, output_path: str, 
+                                   gain_multiplier: float = 1.0,
+                                   device_index: Optional[int] = None,
+                                   progress_callback: Optional[callable] = None) -> Dict:
+        """Record voice from microphone with gain control and progress tracking"""
+        return self.tts_engine.record_voice_from_microphone(
+            duration=duration, 
+            output_path=output_path,
+            gain_multiplier=gain_multiplier,
+            device_index=device_index,
+            progress_callback=progress_callback
+        )
     
     def create_voice_samples_from_media(self, media_path: str, media_type: str = "auto") -> Dict:
         """
@@ -286,4 +295,28 @@ class AutoVideoGenerator:
     
     def test_microphone(self, device_index: Optional[int] = None) -> Dict:
         """Test microphone functionality"""
-        return self.tts_engine.test_microphone(device_index) 
+        return self.tts_engine.test_microphone(device_index)
+    
+    def start_audio_monitoring(self, device_index: Optional[int] = None, 
+                             gain_multiplier: float = 1.0,
+                             callback: Optional[callable] = None) -> Dict:
+        """Start real-time audio level monitoring"""
+        return self.tts_engine.start_audio_monitoring(
+            device_index=device_index,
+            gain_multiplier=gain_multiplier,
+            callback=callback
+        )
+    
+    def stop_audio_monitoring(self) -> Dict:
+        """Stop audio monitoring"""
+        return self.tts_engine.stop_audio_monitoring()
+    
+    def get_audio_level_preview(self, device_index: Optional[int] = None, 
+                              gain_multiplier: float = 1.0, 
+                              duration: float = 0.1) -> Dict:
+        """Get a quick audio level preview"""
+        return self.tts_engine.get_audio_level_preview(
+            device_index=device_index,
+            gain_multiplier=gain_multiplier,
+            duration=duration
+        ) 

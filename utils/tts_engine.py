@@ -212,9 +212,18 @@ class TTSEngine:
         """Extract and process voice from audio file"""
         return self.voice_cloner.extract_voice_from_audio(audio_path, output_path)
     
-    def record_voice_from_microphone(self, duration: int, output_path: str) -> Dict:
-        """Record voice from microphone"""
-        return self.voice_cloner.record_voice_from_microphone(duration, output_path)
+    def record_voice_from_microphone(self, duration: int, output_path: str, 
+                                   gain_multiplier: float = 1.0,
+                                   device_index: Optional[int] = None,
+                                   progress_callback: Optional[callable] = None) -> Dict:
+        """Record voice from microphone with gain control"""
+        return self.voice_cloner.record_voice_from_microphone(
+            duration=duration,
+            output_path=output_path,
+            gain_multiplier=gain_multiplier,
+            device_index=device_index,
+            progress_callback=progress_callback
+        )
     
     def create_voice_samples(self, audio_path: str, output_dir: str) -> Dict:
         """Create voice samples for cloning"""
@@ -238,4 +247,28 @@ class TTSEngine:
         if self.azure_available:
             providers.append("azure")
         providers.append("basic")  # Always available as fallback
-        return providers 
+        return providers
+    
+    def start_audio_monitoring(self, device_index: Optional[int] = None, 
+                             gain_multiplier: float = 1.0,
+                             callback: Optional[callable] = None) -> Dict:
+        """Start real-time audio level monitoring"""
+        return self.voice_cloner.start_audio_monitoring(
+            device_index=device_index,
+            gain_multiplier=gain_multiplier,
+            callback=callback
+        )
+    
+    def stop_audio_monitoring(self) -> Dict:
+        """Stop audio monitoring"""
+        return self.voice_cloner.stop_audio_monitoring()
+    
+    def get_audio_level_preview(self, device_index: Optional[int] = None, 
+                              gain_multiplier: float = 1.0, 
+                              duration: float = 0.1) -> Dict:
+        """Get a quick audio level preview"""
+        return self.voice_cloner.get_audio_level_preview(
+            device_index=device_index,
+            gain_multiplier=gain_multiplier,
+            duration=duration
+        ) 
