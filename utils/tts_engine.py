@@ -250,18 +250,20 @@ class TTSEngine:
         return providers
     
     def start_audio_monitoring(self, device_index: Optional[int] = None, 
-                             gain_multiplier: float = 1.0,
-                             callback: Optional[callable] = None) -> Dict:
+                             gain_multiplier: float = 1.0) -> Dict:
         """Start real-time audio level monitoring"""
         return self.voice_cloner.start_audio_monitoring(
             device_index=device_index,
-            gain_multiplier=gain_multiplier,
-            callback=callback
+            gain_multiplier=gain_multiplier
         )
     
     def stop_audio_monitoring(self) -> Dict:
         """Stop audio monitoring"""
         return self.voice_cloner.stop_audio_monitoring()
+    
+    def get_current_audio_level(self) -> Dict:
+        """Get current audio level from monitoring thread"""
+        return self.voice_cloner.get_current_audio_level()
     
     def get_audio_level_preview(self, device_index: Optional[int] = None, 
                               gain_multiplier: float = 1.0, 

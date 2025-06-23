@@ -298,18 +298,20 @@ class AutoVideoGenerator:
         return self.tts_engine.test_microphone(device_index)
     
     def start_audio_monitoring(self, device_index: Optional[int] = None, 
-                             gain_multiplier: float = 1.0,
-                             callback: Optional[callable] = None) -> Dict:
+                             gain_multiplier: float = 1.0) -> Dict:
         """Start real-time audio level monitoring"""
         return self.tts_engine.start_audio_monitoring(
             device_index=device_index,
-            gain_multiplier=gain_multiplier,
-            callback=callback
+            gain_multiplier=gain_multiplier
         )
     
     def stop_audio_monitoring(self) -> Dict:
         """Stop audio monitoring"""
         return self.tts_engine.stop_audio_monitoring()
+    
+    def get_current_audio_level(self) -> Dict:
+        """Get current audio level from monitoring thread"""
+        return self.tts_engine.get_current_audio_level()
     
     def get_audio_level_preview(self, device_index: Optional[int] = None, 
                               gain_multiplier: float = 1.0, 

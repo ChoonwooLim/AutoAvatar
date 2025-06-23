@@ -40,6 +40,13 @@ class VoiceCloner:
         self.monitoring_active = False
         self.monitoring_thread = None
         self.audio_buffer = []
+        self.current_audio_level = {
+            'rms_level': 0.0,
+            'peak_level': 0.0,
+            'gain': 1.0,
+            'clipping': False,
+            'timestamp': 0.0
+        }
         
         # Initialize Whisper for transcription
         try:
@@ -545,28 +552,62 @@ class VoiceCloner:
             return []
     
     def test_microphone(self, device_index: Optional[int] = None) -> Dict:
-        """Test microphone functionality"""
+        """Test microphone functionality with safe parameters"""
         if not PYAUDIO_AVAILABLE:
             return {"success": False, "microphone_working": False, "error": "PyAudio not available"}
         
         try:
             p = pyaudio.PyAudio()
             
-            # Test recording for 2 seconds
+            # Get device capabilities
+            if device_index is not None:
+                try:
+                    device_info = p.get_device_info_by_index(device_index)
+                    max_channels = int(device_info.get('maxInputChannels', 1))
+                    default_rate = int(device_info.get('defaultSampleRate', 44100))
+                except:
+                    max_channels = 1
+                    default_rate = 44100
+            else:
+                max_channels = 1
+                default_rate = 44100
+            
+            # Safe test parameters
             chunk = 1024
             format = pyaudio.paInt16
-            channels = 1
-            rate = 44100
-            duration = 2
+            channels = min(1, max_channels)
+            duration = 1  # Shorter test duration
             
-            stream = p.open(
-                format=format,
-                channels=channels,
-                rate=rate,
-                input=True,
-                input_device_index=device_index,
-                frames_per_buffer=chunk
-            )
+            # Try different sample rates
+            rate_options = [default_rate, 44100, 48000, 22050, 16000]
+            stream = None
+            rate = 44100
+            last_error = None
+            
+            for test_rate in rate_options:
+                try:
+                    stream = p.open(
+                        format=format,
+                        channels=channels,
+                        rate=int(test_rate),
+                        input=True,
+                        input_device_index=device_index,
+                        frames_per_buffer=chunk
+                    )
+                    rate = int(test_rate)
+                    break
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+            
+            if stream is None:
+                p.terminate()
+                error_detail = f"Cannot open microphone with any supported parameters. Last error: {last_error}" if last_error else "Cannot open microphone with any supported parameters"
+                return {
+                    "success": False,
+                    "microphone_working": False,
+                    "error": error_detail
+                }
             
             frames = []
             for _ in range(0, int(rate / chunk * duration)):
@@ -629,8 +670,7 @@ class VoiceCloner:
             }
     
     def start_audio_monitoring(self, device_index: Optional[int] = None, 
-                             gain_multiplier: float = 1.0,
-                             callback: Optional[callable] = None) -> Dict:
+                             gain_multiplier: float = 1.0) -> Dict:
         """
         Start real-time audio level monitoring
         
@@ -648,24 +688,58 @@ class VoiceCloner:
         try:
             import threading
             
-            # Audio parameters
-            chunk = 1024
-            format = pyaudio.paInt16
-            channels = 1
-            rate = 44100
-            
-            # Initialize PyAudio
+            # Initialize PyAudio first to check device capabilities
             p = pyaudio.PyAudio()
             
-            # Open stream
-            stream = p.open(
-                format=format,
-                channels=channels,
-                rate=rate,
-                input=True,
-                input_device_index=device_index,
-                frames_per_buffer=chunk
-            )
+            # Get device info if device_index is specified
+            if device_index is not None:
+                try:
+                    device_info = p.get_device_info_by_index(device_index)
+                    max_channels = int(device_info.get('maxInputChannels', 1))
+                    default_rate = int(device_info.get('defaultSampleRate', 44100))
+                except:
+                    # Fallback if device info fails
+                    max_channels = 1
+                    default_rate = 44100
+            else:
+                max_channels = 1
+                default_rate = 44100
+            
+            # Safe audio parameters with fallbacks
+            chunk = 1024
+            format = pyaudio.paInt16
+            channels = min(1, max_channels)  # Use 1 channel (mono) for safety
+            
+            # Try different sample rates in order of preference
+            rate_options = [default_rate, 44100, 48000, 22050, 16000]
+            rate = 44100  # Default fallback
+            
+            stream = None
+            last_error = None
+            for test_rate in rate_options:
+                try:
+                    # Test stream creation with current parameters
+                    test_stream = p.open(
+                        format=format,
+                        channels=channels,
+                        rate=int(test_rate),
+                        input=True,
+                        input_device_index=device_index,
+                        frames_per_buffer=chunk
+                    )
+                    # If successful, use these parameters
+                    rate = int(test_rate)
+                    stream = test_stream
+                    break
+                except Exception as e:
+                    # Continue trying other rates
+                    last_error = str(e)
+                    continue
+            
+            if stream is None:
+                p.terminate()
+                error_detail = f"Cannot open audio stream with any supported parameters. Last error: {last_error}" if last_error else "Cannot open audio stream with any supported parameters"
+                return {"success": False, "error": error_detail}
             
             self.monitoring_active = True
             
@@ -692,15 +766,15 @@ class VoiceCloner:
                         # Check for clipping
                         clipping = peak_normalized > 0.95
                         
-                        # Call callback with level data
-                        if callback:
-                            callback({
-                                'rms_level': rms_normalized,
-                                'peak_level': peak_normalized,
-                                'gain': gain_multiplier,
-                                'clipping': clipping,
-                                'timestamp': time.time()
-                            })
+                        # Store level data without calling callback directly
+                        # This prevents ScriptRunContext warnings
+                        self.current_audio_level = {
+                            'rms_level': rms_normalized,
+                            'peak_level': peak_normalized,
+                            'gain': gain_multiplier,
+                            'clipping': clipping,
+                            'timestamp': time.time()
+                        }
                         
                         time.sleep(0.05)  # 20 FPS update rate
                         
@@ -733,6 +807,16 @@ class VoiceCloner:
             self.monitoring_thread.join(timeout=1.0)
         return {"success": True, "message": "Audio monitoring stopped"}
     
+    def get_current_audio_level(self) -> Dict:
+        """
+        Get current audio level from monitoring thread
+        This method is safe to call from Streamlit UI
+        
+        Returns:
+            Dictionary with current audio level data
+        """
+        return self.current_audio_level.copy()
+    
     def get_audio_level_preview(self, device_index: Optional[int] = None, 
                               gain_multiplier: float = 1.0, 
                               duration: float = 0.1) -> Dict:
@@ -751,24 +835,58 @@ class VoiceCloner:
             return {"success": False, "error": "PyAudio not available. Cannot get audio level preview."}
         
         try:
-            # Audio parameters
-            chunk = 1024
-            format = pyaudio.paInt16
-            channels = 1
-            rate = 44100
-            
-            # Initialize PyAudio
+            # Initialize PyAudio first
             p = pyaudio.PyAudio()
             
-            # Open stream
-            stream = p.open(
-                format=format,
-                channels=channels,
-                rate=rate,
-                input=True,
-                input_device_index=device_index,
-                frames_per_buffer=chunk
-            )
+            # Get device capabilities
+            if device_index is not None:
+                try:
+                    device_info = p.get_device_info_by_index(device_index)
+                    max_channels = int(device_info.get('maxInputChannels', 1))
+                    default_rate = int(device_info.get('defaultSampleRate', 44100))
+                except:
+                    max_channels = 1
+                    default_rate = 44100
+            else:
+                max_channels = 1
+                default_rate = 44100
+            
+            # Safe audio parameters
+            chunk = 1024
+            format = pyaudio.paInt16
+            channels = min(1, max_channels)
+            
+            # Try different sample rates
+            rate_options = [default_rate, 44100, 48000, 22050, 16000]
+            stream = None
+            rate = 44100
+            last_error = None
+            
+            for test_rate in rate_options:
+                try:
+                    stream = p.open(
+                        format=format,
+                        channels=channels,
+                        rate=int(test_rate),
+                        input=True,
+                        input_device_index=device_index,
+                        frames_per_buffer=chunk
+                    )
+                    rate = int(test_rate)
+                    break
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+            
+            if stream is None:
+                p.terminate()
+                error_detail = f"Cannot open audio stream for preview. Last error: {last_error}" if last_error else "Cannot open audio stream for preview"
+                return {
+                    "success": False,
+                    "error": error_detail,
+                    "rms_level": 0.0,
+                    "peak_level": 0.0
+                }
             
             # Read audio for specified duration
             frames_to_read = int(rate * duration / chunk)

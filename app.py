@@ -194,11 +194,35 @@ def main():
                 
                 with col1:
                     if st.button("🎤 마이크 테스트", key="test_mic_btn"):
-                        mic_test = st.session_state.generator.test_microphone()
+                        current_mic = st.session_state.get('current_mic_index', None)
+                        
+                        with st.spinner("마이크를 테스트하는 중..."):
+                            mic_test = st.session_state.generator.test_microphone(current_mic)
+                        
                         if mic_test.get("microphone_working"):
                             st.success(f"✅ 마이크 작동 중! 품질: {mic_test.get('quality', '알 수 없음')}")
+                            if mic_test.get('audio_level'):
+                                st.info(f"🔊 오디오 레벨: {mic_test.get('audio_level', 0):.0f}")
                         else:
-                            st.error(f"❌ 마이크 문제: {mic_test.get('error', '알 수 없는 오류')}")
+                            error_msg = mic_test.get('error', '알 수 없는 오류')
+                            st.error(f"❌ 마이크 문제: {error_msg}")
+                            
+                            # 마이크 테스트 실패 시 해결 방법 제시
+                            if "Unanticipated host error" in error_msg or "-9999" in error_msg:
+                                st.warning("""
+                                **🔧 마이크 문제 해결:**
+                                1. **다른 마이크 선택**: 아래에서 다른 마이크 선택
+                                2. **권한 확인**: 브라우저에서 마이크 접근 권한 허용
+                                3. **기본 마이크 사용**: Windows 설정에서 기본 마이크로 설정
+                                4. **앱 재시작**: 브라우저 새로고침 후 다시 시도
+                                """)
+                            elif "Cannot open microphone" in error_msg:
+                                st.info("""
+                                **💡 추가 확인사항:**
+                                - 마이크가 다른 앱에서 사용 중인지 확인
+                                - USB 마이크인 경우 연결 상태 확인
+                                - 시스템 사운드 설정에서 마이크 활성화 확인
+                                """)
                 
                 with col2:
                     # 실시간 볼륨 모니터링 토글
@@ -209,25 +233,39 @@ def main():
                     
                     if st.button("📊 볼륨 모니터링", key="volume_monitor_btn"):
                         if not st.session_state.audio_monitoring:
-                            # 모니터링 시작
-                            def level_callback(data):
-                                st.session_state.audio_level_data = data
-                            
-                            # 현재 설정 가져오기 (세션 상태에서)
+                            # 모니터링 시작 (콜백 없이)
                             current_gain = st.session_state.get('current_gain', 1.0)
                             current_mic = st.session_state.get('current_mic_index', None)
                             
-                            result = st.session_state.generator.start_audio_monitoring(
-                                device_index=current_mic,
-                                gain_multiplier=current_gain,
-                                callback=level_callback
-                            )
+                            with st.spinner("오디오 모니터링을 시작하는 중..."):
+                                result = st.session_state.generator.start_audio_monitoring(
+                                    device_index=current_mic,
+                                    gain_multiplier=current_gain
+                                )
                             
                             if result.get("success"):
                                 st.session_state.audio_monitoring = True
                                 st.success("🎙️ 볼륨 모니터링 시작")
                             else:
-                                st.error(f"모니터링 시작 실패: {result.get('error', '알 수 없는 오류')}")
+                                error_msg = result.get('error', '알 수 없는 오류')
+                                st.error(f"❌ 모니터링 시작 실패: {error_msg}")
+                                
+                                # 구체적인 해결 방법 제시
+                                if "Unanticipated host error" in error_msg or "-9999" in error_msg:
+                                    st.warning("""
+                                    **🔧 해결 방법:**
+                                    1. 다른 마이크를 선택해보세요
+                                    2. 시스템 오디오 설정에서 마이크 권한 확인
+                                    3. 브라우저를 새로고침 후 다시 시도
+                                    4. 시스템 기본 마이크로 변경 후 재시도
+                                    """)
+                                elif "Cannot open audio stream" in error_msg:
+                                    st.info("""
+                                    **💡 권장사항:**
+                                    - 시스템 기본 마이크 사용 권장
+                                    - 다른 앱에서 마이크 사용 중인지 확인
+                                    - 마이크 목록을 새로고침해보세요
+                                    """)
                         else:
                             # 모니터링 중지
                             st.session_state.generator.stop_audio_monitoring()
@@ -240,8 +278,8 @@ def main():
                 if st.session_state.audio_monitoring:
                     st.markdown("### 🎚️ 실시간 오디오 레벨")
                     
-                    # 오디오 레벨 데이터 가져오기
-                    level_data = st.session_state.audio_level_data
+                    # 오디오 레벨 데이터 가져오기 (새로운 방식)
+                    level_data = st.session_state.generator.get_current_audio_level()
                     rms_level = level_data.get('rms_level', 0)
                     peak_level = level_data.get('peak_level', 0)
                     clipping = level_data.get('clipping', False)
@@ -359,68 +397,156 @@ def main():
                         st.session_state.last_gain = gain_multiplier
                     elif abs(st.session_state.last_gain - gain_multiplier) > 0.1:
                         st.session_state.last_gain = gain_multiplier
-                        # 모니터링 재시작
+                        # 모니터링 재시작 (콜백 없이)
                         st.session_state.generator.stop_audio_monitoring()
-                        
-                        def level_callback(data):
-                            st.session_state.audio_level_data = data
                         
                         st.session_state.generator.start_audio_monitoring(
                             device_index=st.session_state.get('current_mic_index', None),
-                            gain_multiplier=gain_multiplier,
-                            callback=level_callback
+                            gain_multiplier=gain_multiplier
                         )
                 
-                # 마이크 선택 (고급 옵션)
-                with st.expander("🎙️ 고급 녹음 설정"):
-                    available_mics = st.session_state.generator.get_available_microphones()
-                    if available_mics:
-                        mic_options = ["기본 마이크"] + [f"{mic['name']}" for mic in available_mics]
-                        selected_mic = st.selectbox("마이크 선택", mic_options)
-                        
-                        if selected_mic != "기본 마이크":
-                            selected_mic_index = next(
-                                (i for i, mic in enumerate(available_mics) 
-                                 if mic['name'] == selected_mic), None
-                            )
-                        else:
-                            selected_mic_index = None
-                        
-                        # 세션 상태에 저장
-                        st.session_state.current_mic_index = selected_mic_index
-                    else:
-                        selected_mic_index = None
-                        st.write("사용 가능한 마이크를 찾을 수 없습니다.")
-                        # 세션 상태에 저장
-                        st.session_state.current_mic_index = None
+                # 🎙️ 오디오 입력 소스 선택 (메인 화면으로 이동)
+                st.markdown("### 🎙️ 오디오 입력 소스")
+                
+                available_mics = st.session_state.generator.get_available_microphones()
+                if available_mics:
+                    # 마이크 정보 표시
+                    st.info(f"📊 **{len(available_mics)}개**의 오디오 입력 장치를 발견했습니다")
                     
+                    # 마이크 선택 드롭다운
+                    mic_options = ["🎤 기본 마이크 (시스템 기본값)"] + [f"🎙️ {mic['name']}" for mic in available_mics]
+                    selected_mic = st.selectbox(
+                        "사용할 마이크를 선택하세요:",
+                        mic_options,
+                        help="마이크를 변경하면 볼륨 모니터링이 자동으로 재시작됩니다"
+                    )
+                    
+                    if selected_mic.startswith("🎤 기본 마이크"):
+                        selected_mic_index = None
+                        current_mic_name = "시스템 기본 마이크"
+                    else:
+                        mic_name = selected_mic.replace("🎙️ ", "")
+                        selected_mic_index = next(
+                            (i for i, mic in enumerate(available_mics) 
+                             if mic['name'] == mic_name), None
+                        )
+                        current_mic_name = mic_name
+                    
+                    # 세션 상태에 저장
+                    old_mic_index = st.session_state.get('current_mic_index', None)
+                    st.session_state.current_mic_index = selected_mic_index
+                    
+                    # 마이크 변경시 모니터링 재시작
+                    if old_mic_index != selected_mic_index and st.session_state.audio_monitoring:
+                        st.session_state.generator.stop_audio_monitoring()
+                        st.session_state.generator.start_audio_monitoring(
+                            device_index=selected_mic_index,
+                            gain_multiplier=st.session_state.get('current_gain', 1.0)
+                        )
+                        st.success(f"🔄 마이크가 '{current_mic_name}'로 변경되었습니다!")
+                    
+                    # 현재 선택된 마이크 표시
+                    st.success(f"✅ **현재 마이크:** {current_mic_name}")
+                    
+                    # 마이크 상세 정보 (확장 메뉴)
+                    with st.expander("📋 마이크 상세 정보", expanded=False):
+                        if selected_mic_index is not None and selected_mic_index < len(available_mics):
+                            mic_info = available_mics[selected_mic_index]
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write(f"**장치명:** {mic_info.get('name', 'N/A')}")
+                                st.write(f"**인덱스:** {selected_mic_index}")
+                            with col2:
+                                st.write(f"**채널 수:** {mic_info.get('maxInputChannels', 'N/A')}")
+                                st.write(f"**샘플레이트:** {mic_info.get('defaultSampleRate', 'N/A')} Hz")
+                        else:
+                            st.write("**시스템 기본 마이크 사용 중**")
+                            st.write("상세 정보는 시스템 설정에서 확인하세요.")
+                
+                else:
+                    st.error("❌ 사용 가능한 마이크를 찾을 수 없습니다!")
+                    st.info("""
+                    **해결 방법:**
+                    1. 마이크가 컴퓨터에 연결되어 있는지 확인
+                    2. 시스템 오디오 설정에서 마이크 권한 확인
+                    3. 브라우저에서 마이크 접근 권한 허용
+                    4. 앱을 새로고침하여 다시 시도
+                    """)
+                    # 세션 상태에 저장
+                    st.session_state.current_mic_index = None
+                
+                # 고급 설정 (간소화)
+                with st.expander("⚙️ 고급 설정", expanded=False):
                     # 빠른 레벨 체크
-                    if st.button("⚡ 빠른 레벨 체크", key="quick_level_check"):
-                        with st.spinner("오디오 레벨 확인 중..."):
-                            level_check = st.session_state.generator.get_audio_level_preview(
-                                device_index=st.session_state.get('current_mic_index', None),
-                                gain_multiplier=st.session_state.get('current_gain', 1.0),
-                                duration=1.0
-                            )
-                            
-                            if level_check.get("success"):
-                                rms = level_check.get("rms_level", 0)
-                                peak = level_check.get("peak_level", 0)
-                                quality = level_check.get("signal_quality", "알 수 없음")
-                                clipping = level_check.get("clipping_detected", False)
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("⚡ 빠른 레벨 체크", key="quick_level_check", use_container_width=True):
+                            with st.spinner("오디오 레벨 확인 중..."):
+                                level_check = st.session_state.generator.get_audio_level_preview(
+                                    device_index=st.session_state.get('current_mic_index', None),
+                                    gain_multiplier=st.session_state.get('current_gain', 1.0),
+                                    duration=1.0
+                                )
                                 
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.metric("RMS 레벨", f"{rms*100:.1f}%")
-                                    st.metric("신호 품질", quality)
-                                with col2:
-                                    st.metric("피크 레벨", f"{peak*100:.1f}%")
-                                    if clipping:
-                                        st.error("⚠️ 클리핑 감지됨!")
-                                    else:
-                                        st.success("✅ 클리핑 없음")
-                            else:
-                                st.error(f"레벨 체크 실패: {level_check.get('error', '알 수 없는 오류')}")
+                                if level_check.get("success"):
+                                    rms = level_check.get("rms_level", 0)
+                                    peak = level_check.get("peak_level", 0)
+                                    quality = level_check.get("signal_quality", "알 수 없음")
+                                    clipping = level_check.get("clipping_detected", False)
+                                    
+                                    st.success("✅ 레벨 체크 완료!")
+                                    metric_col1, metric_col2 = st.columns(2)
+                                    with metric_col1:
+                                        st.metric("RMS 레벨", f"{rms*100:.1f}%")
+                                        st.metric("신호 품질", quality)
+                                    with metric_col2:
+                                        st.metric("피크 레벨", f"{peak*100:.1f}%")
+                                        if clipping:
+                                            st.error("⚠️ 클리핑 감지됨!")
+                                        else:
+                                            st.success("✅ 클리핑 없음")
+                                else:
+                                    error_msg = level_check.get('error', '알 수 없는 오류')
+                                    st.error(f"❌ 레벨 체크 실패: {error_msg}")
+                                    
+                                    # 상세한 오류 분석 및 해결 방법
+                                    if "Cannot open audio stream" in error_msg:
+                                        with st.expander("🔧 오류 해결 방법", expanded=True):
+                                            st.warning("""
+                                            **오디오 스트림 생성 실패 해결 방법:**
+                                            
+                                            1. **마이크 선택 변경**
+                                               - 위의 드롭다운에서 다른 마이크 선택
+                                               - 시스템 기본 마이크 사용 권장
+                                            
+                                            2. **마이크 권한 확인**
+                                               - Windows 설정 → 개인정보 → 마이크
+                                               - 브라우저 마이크 권한 허용
+                                            
+                                            3. **마이크 상태 확인**
+                                               - 다른 앱에서 마이크 사용 중인지 확인
+                                               - USB 마이크인 경우 연결 상태 확인
+                                            
+                                            4. **시스템 재시작**
+                                               - 오디오 드라이버 문제일 수 있음
+                                               - 앱 새로고침 또는 브라우저 재시작
+                                            """)
+                                            
+                                            # 구체적인 오류 정보 표시
+                                            if "Last error:" in error_msg:
+                                                st.info(f"**구체적인 오류:** {error_msg}")
+                                    
+                                    # 대안 제시
+                                    st.info("""
+                                    **💡 대안:**
+                                    - 마이크 테스트 버튼을 먼저 시도해보세요
+                                    - 볼륨 모니터링으로 실시간 확인 가능
+                                    - 녹음 기능은 별도로 작동할 수 있습니다
+                                    """)
+                    
+                    with col2:
+                        if st.button("🔄 마이크 목록 새로고침", key="refresh_mics", use_container_width=True):
+                            st.rerun()
                 
                 # 녹음 상태 초기화
                 if 'recording_state' not in st.session_state:
@@ -626,29 +752,196 @@ def main():
                         st.rerun()
             
             with voice_cloning_tab3:
-                st.write("**현재 음성 세션:**")
+                st.markdown("### 🎭 음성 샘플 관리")
                 
+                # 현재 활성 세션 표시
                 if hasattr(st.session_state, 'voice_session_id'):
-                    st.info(f"🎭 활성 음성 세션: {st.session_state.voice_session_id}")
+                    st.success(f"✅ 활성 음성 세션: **{st.session_state.voice_session_id}**")
                     
-                    if st.button("🗑️ 음성 세션 삭제", key="clear_voice_session_btn"):
-                        if hasattr(st.session_state, 'voice_samples_dir'):
-                            # 음성 샘플 정리
-                            try:
-                                import shutil
-                                shutil.rmtree(st.session_state.voice_samples_dir)
-                            except:
-                                pass
+                    # 음성 샘플 확인 및 재생
+                    if hasattr(st.session_state, 'voice_samples_dir') and os.path.exists(st.session_state.voice_samples_dir):
+                        st.markdown("#### 🎵 생성된 음성 샘플")
                         
-                        # 세션 변수 삭제
-                        delattr(st.session_state, 'voice_session_id')
-                        if hasattr(st.session_state, 'voice_samples_dir'):
-                            delattr(st.session_state, 'voice_samples_dir')
+                        # 샘플 파일 목록 가져오기
+                        sample_files = []
+                        for filename in os.listdir(st.session_state.voice_samples_dir):
+                            if filename.endswith('.wav'):
+                                sample_path = os.path.join(st.session_state.voice_samples_dir, filename)
+                                if os.path.exists(sample_path):
+                                    # 파일 크기와 길이 정보
+                                    file_size = os.path.getsize(sample_path) / 1024  # KB
+                                    try:
+                                        import librosa
+                                        audio, sr = librosa.load(sample_path, sr=None)
+                                        duration = len(audio) / sr
+                                    except:
+                                        duration = 0
+                                    
+                                    sample_files.append({
+                                        'name': filename,
+                                        'path': sample_path,
+                                        'size': file_size,
+                                        'duration': duration
+                                    })
                         
-                        st.success("음성 세션이 삭제되었습니다!")
-                        st.rerun()
+                        if sample_files:
+                            # 샘플 정보 표시
+                            st.info(f"📊 총 **{len(sample_files)}개**의 음성 샘플이 생성되었습니다")
+                            
+                            # 각 샘플 표시
+                            for i, sample in enumerate(sample_files):
+                                with st.expander(f"🎤 {sample['name']} ({sample['duration']:.1f}초, {sample['size']:.1f}KB)", expanded=False):
+                                    col1, col2 = st.columns([3, 1])
+                                    
+                                    with col1:
+                                        # 오디오 플레이어
+                                        st.audio(sample['path'], format="audio/wav")
+                                    
+                                    with col2:
+                                        # 샘플 정보
+                                        st.metric("길이", f"{sample['duration']:.1f}초")
+                                        st.metric("크기", f"{sample['size']:.1f}KB")
+                                        
+                                        # 품질 평가 (간단한 휴리스틱)
+                                        if sample['duration'] >= 3.0:
+                                            quality = "좋음" if sample['duration'] <= 10.0 else "길음"
+                                            quality_color = "green" if quality == "좋음" else "orange"
+                                        else:
+                                            quality = "짧음"
+                                            quality_color = "red"
+                                        
+                                        st.markdown(f"**품질:** <span style='color: {quality_color}'>{quality}</span>", unsafe_allow_html=True)
+                            
+                            # 샘플 통계
+                            st.markdown("#### 📈 샘플 통계")
+                            stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+                            
+                            total_duration = sum(s['duration'] for s in sample_files)
+                            total_size = sum(s['size'] for s in sample_files)
+                            good_samples = len([s for s in sample_files if 3.0 <= s['duration'] <= 10.0])
+                            
+                            with stat_col1:
+                                st.metric("총 샘플 수", len(sample_files))
+                            with stat_col2:
+                                st.metric("총 길이", f"{total_duration:.1f}초")
+                            with stat_col3:
+                                st.metric("총 크기", f"{total_size:.1f}KB")
+                            with stat_col4:
+                                st.metric("품질 좋은 샘플", f"{good_samples}개")
+                        else:
+                            st.warning("⚠️ 음성 샘플이 생성되지 않았습니다. 더 긴 음성이나 명확한 발음의 오디오를 사용해보세요.")
+                    else:
+                        st.warning("⚠️ 음성 샘플 폴더를 찾을 수 없습니다.")
+                    
+                    # 세션 관리 버튼들
+                    st.markdown("#### ⚙️ 세션 관리")
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if st.button("🔄 샘플 새로고침", key="refresh_samples_btn", use_container_width=True):
+                            st.rerun()
+                    
+                    with col2:
+                        if st.button("🗑️ 음성 세션 삭제", key="clear_voice_session_btn", use_container_width=True):
+                            if hasattr(st.session_state, 'voice_samples_dir'):
+                                # 음성 샘플 정리
+                                try:
+                                    import shutil
+                                    shutil.rmtree(st.session_state.voice_samples_dir)
+                                    st.success("✅ 음성 샘플 폴더가 삭제되었습니다!")
+                                except Exception as e:
+                                    st.error(f"폴더 삭제 실패: {e}")
+                            
+                            # 세션 변수 삭제
+                            delattr(st.session_state, 'voice_session_id')
+                            if hasattr(st.session_state, 'voice_samples_dir'):
+                                delattr(st.session_state, 'voice_samples_dir')
+                            
+                            st.success("🎭 음성 세션이 삭제되었습니다!")
+                            st.rerun()
+                
                 else:
-                    st.write("활성 음성 세션이 없습니다")
+                    st.info("💡 현재 활성 음성 세션이 없습니다")
+                    st.markdown("""
+                    **음성 샘플을 생성하려면:**
+                    1. 📁 **미디어에서** 탭: 비디오/오디오 파일 업로드
+                    2. 🎤 **음성 녹음** 탭: 마이크로 직접 녹음
+                    """)
+                
+                # 모든 세션 관리 (고급 기능)
+                with st.expander("🔧 고급: 모든 음성 세션 관리", expanded=False):
+                    st.markdown("#### 📁 저장된 모든 음성 세션")
+                    
+                    # temp 폴더에서 voice_samples_ 폴더들 찾기
+                    all_sessions = []
+                    if os.path.exists(Config.TEMP_DIR):
+                        for item in os.listdir(Config.TEMP_DIR):
+                            if item.startswith('voice_samples_') and os.path.isdir(os.path.join(Config.TEMP_DIR, item)):
+                                session_id = item.replace('voice_samples_', '')
+                                session_path = os.path.join(Config.TEMP_DIR, item)
+                                
+                                # 세션 정보 수집
+                                sample_count = len([f for f in os.listdir(session_path) if f.endswith('.wav')])
+                                folder_size = sum(os.path.getsize(os.path.join(session_path, f)) 
+                                                for f in os.listdir(session_path) if os.path.isfile(os.path.join(session_path, f)))
+                                
+                                all_sessions.append({
+                                    'id': session_id,
+                                    'path': session_path,
+                                    'samples': sample_count,
+                                    'size': folder_size / 1024  # KB
+                                })
+                    
+                    if all_sessions:
+                        st.info(f"📊 총 **{len(all_sessions)}개**의 음성 세션을 발견했습니다")
+                        
+                        for session in all_sessions:
+                            is_active = hasattr(st.session_state, 'voice_session_id') and st.session_state.voice_session_id == session['id']
+                            status_icon = "🟢" if is_active else "⚪"
+                            
+                            col1, col2, col3 = st.columns([2, 1, 1])
+                            
+                            with col1:
+                                st.write(f"{status_icon} **{session['id']}** ({session['samples']}개 샘플, {session['size']:.1f}KB)")
+                            
+                            with col2:
+                                if not is_active and st.button("🔄 활성화", key=f"activate_{session['id']}", use_container_width=True):
+                                    st.session_state.voice_session_id = session['id']
+                                    st.session_state.voice_samples_dir = session['path']
+                                    st.success(f"✅ 세션 {session['id']} 활성화!")
+                                    st.rerun()
+                            
+                            with col3:
+                                if st.button("🗑️ 삭제", key=f"delete_{session['id']}", use_container_width=True):
+                                    try:
+                                        import shutil
+                                        shutil.rmtree(session['path'])
+                                        st.success(f"✅ 세션 {session['id']} 삭제 완료!")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"삭제 실패: {e}")
+                        
+                        # 전체 정리 버튼
+                        if st.button("🧹 모든 세션 정리", key="cleanup_all_sessions", type="secondary"):
+                            deleted_count = 0
+                            for session in all_sessions:
+                                try:
+                                    import shutil
+                                    shutil.rmtree(session['path'])
+                                    deleted_count += 1
+                                except:
+                                    pass
+                            
+                            # 활성 세션도 정리
+                            if hasattr(st.session_state, 'voice_session_id'):
+                                delattr(st.session_state, 'voice_session_id')
+                            if hasattr(st.session_state, 'voice_samples_dir'):
+                                delattr(st.session_state, 'voice_samples_dir')
+                            
+                            st.success(f"🧹 {deleted_count}개 세션이 정리되었습니다!")
+                            st.rerun()
+                    else:
+                        st.write("저장된 음성 세션이 없습니다.")
         
         # 복제된 음성 사용 안내
         if hasattr(st.session_state, 'voice_session_id') and voice_provider != "cloned":

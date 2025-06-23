@@ -3,9 +3,28 @@ import os
 import tempfile
 import time
 from PIL import Image
-from config import Config
-from utils.script_generator import ScriptGenerator
-from utils.api_key_ui import render_api_key_setup
+
+# 선택적 import - Cloud 환경에서 안전하게 처리
+try:
+    from config import Config
+except ImportError:
+    class Config:
+        OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
+        @staticmethod
+        def validate_keys():
+            return [] if Config.OPENAI_API_KEY else ["OPENAI_API_KEY"]
+
+try:
+    from utils.script_generator import ScriptGenerator
+except ImportError:
+    st.error("스크립트 생성 모듈을 불러올 수 없습니다.")
+    st.stop()
+
+try:
+    from utils.api_key_ui import render_api_key_setup
+except ImportError:
+    def render_api_key_setup():
+        st.info("API 키 설정 UI를 불러올 수 없습니다. Streamlit Secrets를 사용하세요.")
 
 # 페이지 설정
 st.set_page_config(
