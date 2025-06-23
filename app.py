@@ -970,6 +970,7 @@ def main():
         with st.expander("🔧 고급 옵션"):
             show_script = st.checkbox("생성된 스크립트 표시", value=True)
             show_timing = st.checkbox("타이밍 분석 표시", value=True)
+            enable_lipsync = st.checkbox("립싱크 활성화", value=False, help="얼굴 애니메이션과 립싱크를 적용합니다")
             auto_cleanup = st.checkbox("오래된 파일 자동 정리", value=True)
             
             if auto_cleanup:
@@ -985,7 +986,7 @@ def main():
             st.rerun()
     else:
         # 메인 비디오 생성 인터페이스
-        main_tab1, main_tab2, main_tab3 = st.tabs(["🎬 비디오 생성", "⚙️ API 키 설정", "📁 파일 관리"])
+        main_tab1, main_tab2, main_tab3, main_tab4 = st.tabs(["🎬 비디오 생성", "🎭 립싱크 비디오", "⚙️ API 키 설정", "📁 파일 관리"])
         
         with main_tab1:
             # 비디오 생성 인터페이스
@@ -1084,14 +1085,173 @@ def main():
                             st.session_state.get('temp_music_path', None),
                             voice_samples_dir,
                             show_script,
-                            show_timing
+                            show_timing,
+                            enable_lipsync
                         )
         
         with main_tab2:
+            # 립싱크 비디오 생성 탭
+            st.header("🎭 립싱크 비디오 생성")
+            st.markdown("얼굴 이미지를 업로드하면 입술 움직임에 맞춰 말하는 영상을 만들어드립니다!")
+            
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                st.subheader("📸 얼굴 이미지 업로드")
+                
+                face_image_file = st.file_uploader(
+                    "얼굴이 잘 보이는 이미지를 선택하세요",
+                    type=['png', 'jpg', 'jpeg', 'bmp', 'tiff'],
+                    help="립싱크를 위한 얼굴 이미지를 업로드하세요. 정면을 바라보는 사진이 가장 좋습니다.",
+                    key="lipsync_face_uploader"
+                )
+                
+                if face_image_file is not None:
+                    # 업로드된 이미지 표시
+                    face_image = Image.open(face_image_file)
+                    st.image(face_image, caption="업로드된 얼굴 이미지", use_container_width=True)
+                    
+                    # Save uploaded file temporarily
+                    temp_dir = tempfile.mkdtemp()
+                    temp_face_path = os.path.join(temp_dir, face_image_file.name)
+                    
+                    with open(temp_face_path, "wb") as f:
+                        f.write(face_image_file.getbuffer())
+                    
+                    st.session_state.temp_face_path = temp_face_path
+                    
+                    # 배경 색상 선택
+                    st.subheader("🎨 배경 설정")
+                    background_option = st.selectbox(
+                        "배경 스타일",
+                        options=["밝은 배경", "어두운 배경", "사용자 정의"],
+                        index=0,
+                        help="비디오의 배경을 선택하세요"
+                    )
+                    
+                    if background_option == "사용자 정의":
+                        custom_color = st.color_picker("배경 색상 선택", "#F0F0F0")
+                        # HEX to RGB 변환
+                        background_rgb = tuple(int(custom_color[i:i+2], 16) for i in (1, 3, 5))
+                    else:
+                        background_rgb = (240, 240, 240) if background_option == "밝은 배경" else (20, 20, 20)
+                    
+                    # 자막 옵션
+                    add_subtitles = st.checkbox("자막 추가", value=True, help="생성된 스크립트를 자막으로 표시합니다")
+            
+            with col2:
+                st.subheader("📝 스크립트 입력")
+                
+                # 스크립트 입력 방식 선택
+                script_input_mode = st.radio(
+                    "스크립트 입력 방식",
+                    options=["직접 입력", "뉴스 주제로 자동 생성"],
+                    index=0,
+                    help="스크립트를 직접 입력하거나 AI가 자동으로 생성하도록 할 수 있습니다"
+                )
+                
+                if script_input_mode == "직접 입력":
+                    lipsync_script = st.text_area(
+                        "말할 내용을 입력하세요:",
+                        height=150,
+                        placeholder="안녕하세요! 오늘은 중요한 뉴스를 전해드리겠습니다...",
+                        help="얼굴이 말할 텍스트를 입력하세요"
+                    )
+                else:
+                    # 뉴스 주제 입력
+                    lipsync_news_topic = st.text_area(
+                        "뉴스 주제를 입력하세요:",
+                        height=100,
+                        placeholder="예: '손흥민 레알 마드리드 이적설'",
+                        help="AI가 이 주제로 뉴스 스크립트를 생성합니다"
+                    )
+                    
+                    # 스크립트 길이 설정
+                    script_duration = st.slider(
+                        "스크립트 길이 (초)",
+                        min_value=10,
+                        max_value=60,
+                        value=20,
+                        step=5,
+                        help="생성할 스크립트의 목표 길이"
+                    )
+                    
+                    # 스크립트 생성 버튼
+                    if st.button("📝 스크립트 생성", key="generate_lipsync_script"):
+                        if lipsync_news_topic.strip():
+                            with st.spinner("AI가 스크립트를 생성하는 중..."):
+                                lipsync_script = st.session_state.generator.script_generator.generate_news_script(
+                                    topic=lipsync_news_topic,
+                                    duration_seconds=script_duration,
+                                    style="modern"
+                                )
+                                
+                                if lipsync_script:
+                                    st.session_state.generated_lipsync_script = lipsync_script
+                                    st.success("✅ 스크립트가 생성되었습니다!")
+                                else:
+                                    st.error("❌ 스크립트 생성에 실패했습니다.")
+                        else:
+                            st.error("뉴스 주제를 입력해주세요!")
+                    
+                    # 생성된 스크립트 표시
+                    if hasattr(st.session_state, 'generated_lipsync_script'):
+                        lipsync_script = st.text_area(
+                            "생성된 스크립트 (수정 가능):",
+                            value=st.session_state.generated_lipsync_script,
+                            height=150,
+                            help="생성된 스크립트를 확인하고 필요시 수정하세요"
+                        )
+                    else:
+                        lipsync_script = ""
+                
+                # 음성 설정
+                st.subheader("🎤 음성 설정")
+                lipsync_voice_provider = st.selectbox(
+                    "음성 제공업체",
+                    options=voice_info['providers'],
+                    index=0,
+                    help="립싱크 비디오에 사용할 음성을 선택하세요",
+                    key="lipsync_voice_provider"
+                )
+                
+                # 복제된 음성 사용 안내
+                if lipsync_voice_provider == "cloned" and hasattr(st.session_state, 'voice_session_id'):
+                    st.info(f"🎭 복제된 음성 사용 (세션: {st.session_state.voice_session_id[:8]})")
+                elif lipsync_voice_provider == "cloned":
+                    st.warning("⚠️ 복제된 음성을 사용하려면 먼저 사이드바에서 음성을 복제해주세요.")
+                
+                # 립싱크 비디오 생성 버튼
+                if hasattr(st.session_state, 'temp_face_path') and lipsync_script.strip():
+                    generate_lipsync_button = st.button(
+                        "🎭 립싱크 비디오 생성",
+                        type="primary",
+                        use_container_width=True,
+                        key="generate_lipsync_btn"
+                    )
+                    
+                    if generate_lipsync_button:
+                        # 복제된 음성 사용 시 음성 샘플 디렉토리 가져오기
+                        lipsync_voice_samples_dir = None
+                        if lipsync_voice_provider == "cloned" and hasattr(st.session_state, 'voice_samples_dir'):
+                            lipsync_voice_samples_dir = st.session_state.voice_samples_dir
+                        
+                        generate_lipsync_video(
+                            st.session_state.temp_face_path,
+                            lipsync_script,
+                            lipsync_voice_provider,
+                            lipsync_voice_samples_dir,
+                            background_rgb,
+                            add_subtitles
+                        )
+                else:
+                    st.info("💡 얼굴 이미지와 스크립트를 모두 준비하면 립싱크 비디오를 생성할 수 있습니다.")
+        
+        with main_tab3:
             # API Key setup tab
             render_api_key_setup()
         
-        with main_tab3:
+        with main_tab4:
             # File management tab
             show_file_management()
     
@@ -1108,7 +1268,89 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-def generate_video(image_path, news_topic, duration, style, voice_provider, music_path, voice_samples_dir, show_script, show_timing):
+def generate_lipsync_video(face_image_path, script_text, voice_provider, voice_samples_dir, background_color, add_subtitles):
+    """Generate lip-sync video with progress tracking"""
+    
+    # Progress bar and status
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    # Start generation
+    status_text.text("🎭 립싱크 비디오 생성 중...")
+    progress_bar.progress(10)
+    
+    with st.spinner("립싱크 비디오를 생성하는 중..."):
+        result = st.session_state.generator.generate_lipsync_video(
+            face_image_path=face_image_path,
+            script_text=script_text,
+            voice_provider=voice_provider,
+            voice_samples_dir=voice_samples_dir,
+            background_color=background_color,
+            add_subtitles=add_subtitles
+        )
+    
+    progress_bar.progress(100)
+    
+    if result['success']:
+        st.success("🎉 립싱크 비디오가 성공적으로 생성되었습니다!")
+        
+        # Display results
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # Video player
+            video_file = open(result['video_path'], 'rb')
+            video_bytes = video_file.read()
+            st.video(video_bytes)
+            
+            # Download button
+            st.download_button(
+                label="📥 립싱크 비디오 다운로드",
+                data=video_bytes,
+                file_name=f"lipsync_video_{int(time.time())}.mp4",
+                mime="video/mp4"
+            )
+        
+        with col2:
+            # Video info
+            video_info = st.session_state.generator.get_video_info(result['video_path'])
+            
+            st.markdown('<div class="info-box">', unsafe_allow_html=True)
+            st.write("**🎭 립싱크 비디오 정보:**")
+            st.write(f"• 길이: {result['actual_duration']:.1f}초")
+            st.write(f"• 파일 크기: {video_info['size_mb']} MB")
+            st.write(f"• 음성: {result['voice_provider'].title()}")
+            st.write(f"• 자막: {'포함' if add_subtitles else '미포함'}")
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Script display
+            with st.expander("📝 사용된 스크립트"):
+                st.text_area("스크립트", value=result['script'], height=200, disabled=True)
+    
+    else:
+        st.error(f"❌ 립싱크 비디오 생성 실패: {result.get('error', '알 수 없는 오류')}")
+        
+        # 문제 해결 도움말
+        with st.expander("🔧 문제 해결 도움말"):
+            st.markdown("""
+            **립싱크 비디오 생성이 실패하는 경우:**
+            
+            1. **얼굴 인식 문제**
+               - 정면을 바라보는 선명한 얼굴 사진 사용
+               - 얼굴이 너무 작거나 가려진 부분이 없는지 확인
+               - JPG, PNG 형식의 고해상도 이미지 권장
+            
+            2. **음성 생성 문제**
+               - API 키가 올바르게 설정되었는지 확인
+               - 스크립트가 너무 길지 않은지 확인 (60초 이내 권장)
+               - 복제된 음성 사용 시 음성 샘플이 충분한지 확인
+            
+            3. **시스템 리소스 문제**
+               - 메모리 부족 시 브라우저 새로고침 후 재시도
+               - 이미지 크기를 줄여서 다시 시도
+            """)
+
+def generate_video(image_path, news_topic, duration, style, voice_provider, music_path, voice_samples_dir, show_script, show_timing, enable_lipsync=False):
     """Generate video with progress tracking"""
     
     # Progress bar and status
@@ -1127,7 +1369,8 @@ def generate_video(image_path, news_topic, duration, style, voice_provider, musi
             style=style,
             voice_provider=voice_provider,
             background_music_path=music_path,
-            voice_samples_dir=voice_samples_dir
+            voice_samples_dir=voice_samples_dir,
+            enable_lipsync=enable_lipsync
         )
     
     progress_bar.progress(100)

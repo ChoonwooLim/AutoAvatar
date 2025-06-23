@@ -8,6 +8,7 @@ from config import Config
 from utils.script_generator import ScriptGenerator
 from utils.tts_engine import TTSEngine
 from utils.video_composer import VideoComposer
+from utils.face_animator_simple import SimpleFaceAnimator
 
 
 class AutoVideoGenerator:
@@ -16,6 +17,7 @@ class AutoVideoGenerator:
         self.script_generator = ScriptGenerator()
         self.tts_engine = TTSEngine()
         self.video_composer = VideoComposer()
+        self.face_animator = SimpleFaceAnimator()
         
         # Create necessary directories
         self._setup_directories()
@@ -39,7 +41,8 @@ class AutoVideoGenerator:
                       style: str = "modern",
                       voice_provider: str = "auto",
                       background_music_path: Optional[str] = None,
-                      voice_samples_dir: Optional[str] = None) -> Dict:
+                      voice_samples_dir: Optional[str] = None,
+                      enable_lipsync: bool = False) -> Dict:
         """
         Generate a complete news video from image and topic
         
@@ -51,6 +54,7 @@ class AutoVideoGenerator:
             voice_provider: TTS provider (auto, elevenlabs, azure, cloned)
             background_music_path: Optional background music file
             voice_samples_dir: Directory with voice samples for cloning
+            enable_lipsync: Enable face animation and lip sync
         
         Returns:
             Dictionary with generation results and file paths
@@ -105,15 +109,23 @@ class AutoVideoGenerator:
             print(f"🎵 Voiceover generated: {actual_duration:.1f}s")
             
             # Step 3: Create video
-            print("🎬 Creating video...")
-            video_success = self.video_composer.create_video(
-                image_path=image_path,
-                audio_path=audio_path,
-                script_text=script,
-                output_path=output_path,
-                background_music_path=background_music_path,
-                style=style
-            )
+            if enable_lipsync:
+                print("🎬 Creating lip-sync video...")
+                video_success = self.face_animator.create_lipsync_video(
+                    face_image_path=image_path,
+                    audio_path=audio_path,
+                    output_path=output_path
+                )
+            else:
+                print("🎬 Creating video...")
+                video_success = self.video_composer.create_video(
+                    image_path=image_path,
+                    audio_path=audio_path,
+                    script_text=script,
+                    output_path=output_path,
+                    background_music_path=background_music_path,
+                    style=style
+                )
             
             if not video_success:
                 return {"success": False, "error": "Failed to create video"}
@@ -321,4 +333,136 @@ class AutoVideoGenerator:
             device_index=device_index,
             gain_multiplier=gain_multiplier,
             duration=duration
-        ) 
+        )
+    
+    def generate_lipsync_video(self,
+                              face_image_path: str,
+                              script_text: str,
+                              voice_provider: str = "auto",
+                              voice_samples_dir: Optional[str] = None,
+                              background_color: tuple = (240, 240, 240),
+                              add_subtitles: bool = True) -> Dict:
+        """
+        Generate a lip-sync video from face image and script
+        
+        Args:
+            face_image_path: Path to the face image
+            script_text: Text script to be spoken
+            voice_provider: TTS provider (auto, elevenlabs, azure, cloned)
+            voice_samples_dir: Directory with voice samples for cloning
+            background_color: RGB background color
+            add_subtitles: Whether to add subtitles
+        
+        Returns:
+            Dictionary with generation results and file paths
+        """
+        try:
+            # Validate inputs
+            if not os.path.exists(face_image_path):
+                return {"success": False, "error": "Face image file not found"}
+            
+            if not script_text.strip():
+                return {"success": False, "error": "Script text is required"}
+            
+            # Generate unique filename for this video
+            import uuid
+            video_id = str(uuid.uuid4())[:8]
+            base_filename = f"lipsync_video_{video_id}"
+            
+            # File paths
+            audio_path = os.path.join(Config.TEMP_DIR, f"{base_filename}_audio.mp3")
+            output_path = os.path.join(Config.OUTPUT_DIR, f"{base_filename}.mp4")
+            
+            # Step 1: Generate voiceover
+            print("🗣️ Generating voiceover for lip-sync...")
+            tts_success = self.tts_engine.generate_speech(
+                text=script_text,
+                output_path=audio_path,
+                voice_provider=voice_provider,
+                voice_samples_dir=voice_samples_dir
+            )
+            
+            if not tts_success:
+                return {"success": False, "error": "Failed to generate voiceover"}
+            
+            # Get actual audio duration
+            actual_duration = self.tts_engine.get_audio_duration(audio_path)
+            print(f"🎵 Voiceover generated: {actual_duration:.1f}s")
+            
+            # Step 2: Create lip-sync video
+            print("🎭 Creating lip-sync animation...")
+            video_success = self.face_animator.create_lipsync_video(
+                face_image_path=face_image_path,
+                audio_path=audio_path,
+                output_path=output_path
+            )
+            
+            if not video_success:
+                return {"success": False, "error": "Failed to create lip-sync video"}
+            
+            # Cleanup temporary files
+            try:
+                os.remove(audio_path)
+            except:
+                pass
+            
+            print(f"✅ Lip-sync video created successfully: {output_path}")
+            
+            return {
+                "success": True,
+                "video_path": output_path,
+                "script": script_text,
+                "actual_duration": actual_duration,
+                "voice_provider": voice_provider,
+                "lipsync_enabled": True
+            }
+            
+        except Exception as e:
+            print(f"❌ Error generating lip-sync video: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def create_simple_lipsync(self, face_image_path: str, audio_path: str, output_path: str) -> Dict:
+        """
+        Create a simple lip-sync video from existing face image and audio
+        
+        Args:
+            face_image_path: Path to the face image
+            audio_path: Path to the audio file
+            output_path: Path for the output video
+        
+        Returns:
+            Dictionary with creation results
+        """
+        try:
+            # Validate inputs
+            if not os.path.exists(face_image_path):
+                return {"success": False, "error": "Face image file not found"}
+            
+            if not os.path.exists(audio_path):
+                return {"success": False, "error": "Audio file not found"}
+            
+            print("🎭 Creating simple lip-sync video...")
+            video_success = self.face_animator.create_lipsync_video(
+                face_image_path=face_image_path,
+                audio_path=audio_path,
+                output_path=output_path
+            )
+            
+            if not video_success:
+                return {"success": False, "error": "Failed to create lip-sync video"}
+            
+            # Get audio duration
+            actual_duration = self.tts_engine.get_audio_duration(audio_path)
+            
+            print(f"✅ Simple lip-sync video created: {output_path}")
+            
+            return {
+                "success": True,
+                "video_path": output_path,
+                "actual_duration": actual_duration,
+                "lipsync_enabled": True
+            }
+            
+        except Exception as e:
+            print(f"❌ Error creating simple lip-sync video: {e}")
+            return {"success": False, "error": str(e)} 
